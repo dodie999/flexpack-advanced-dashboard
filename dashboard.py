@@ -5,8 +5,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from prophet import Prophet
 import openpyxl
-from lifetimes import BetaGeoFitter, GammaGammaFitter # <-- NEW
-from lifetimes.utils import summary_data_from_transaction_data # <-- NEW
+from lifetimes import BetaGeoFitter, GammaGammaFitter
+from lifetimes.utils import summary_data_from_transaction_data
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Comprehensive Sales Dashboard")
@@ -82,7 +82,6 @@ st.title("🚀 Comprehensive Sales Dashboard")
 
 # --- Sidebar ---
 with st.sidebar:
-    # ... (Sidebar code is unchanged) ...
     st.header("1. Upload Your Data")
     uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
     if uploaded_file is None:
@@ -127,11 +126,11 @@ if filtered_df.empty:
     st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"] # <-- NEW TAB
-overview_tab, customer_tab, product_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list) # <-- NEW TAB
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🌍 Geospatial View", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"] # <-- NEW TAB
+overview_tab, customer_tab, product_tab, geo_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list) # <-- NEW TAB
 
-# ... (Code for first 5 tabs is unchanged) ...
 with overview_tab:
+    # ... (code is unchanged) ...
     st.header("Dashboard Overview")
     total_volume = filtered_df[quantity_col].sum()
     unique_customers = filtered_df[customer_col].nunique()
@@ -149,18 +148,16 @@ with overview_tab:
     if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0:
         st.markdown("---")
         st.header("Filtered Order History")
-        if len(selected_customers) == 1:
-            st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
-        elif len(selected_countries) == 1:
-            st.subheader(f"Showing all orders for country: {selected_countries[0]}")
-        elif len(selected_products) > 0:
-            product_list_str = ", ".join(selected_products)
-            st.subheader(f"Showing all orders for product(s): {product_list_str}")
+        if len(selected_customers) == 1: st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
+        elif len(selected_countries) == 1: st.subheader(f"Showing all orders for country: {selected_countries[0]}")
+        elif len(selected_products) > 0: st.subheader(f"Showing all orders for product(s): {', '.join(selected_products)}")
         history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]
         display_cols = [col for col in history_columns if col in filtered_df.columns]
         history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False)
         st.dataframe(history_df, use_container_width=True, hide_index=True)
+
 with customer_tab:
+    # ... (code is unchanged) ...
     st.header("Customer Deep Dive Analysis")
     st.markdown("### High-Volume Customer Analysis")
     if not filtered_df.empty:
@@ -192,7 +189,9 @@ with customer_tab:
         st.plotly_chart(fig, use_container_width=True)
         with st.expander("View Detailed RFM Data and Scores"):
             st.dataframe(rfm_results)
+
 with product_tab:
+    # ... (code is unchanged) ...
     st.header("Product Performance (Pareto 80/20 Analysis)")
     if not filtered_df.empty:
         product_sales = filtered_df.groupby(product_col)[quantity_col].sum().sort_values(ascending=False)
@@ -202,7 +201,33 @@ with product_tab:
         fig.add_trace(go.Bar(x=product_sales_df[product_col], y=product_sales_df[quantity_col], name='Volume'), secondary_y=False)
         fig.add_trace(go.Scatter(x=product_sales_df[product_col], y=product_sales_df['Cumulative_Percentage'], name='Cumulative %'), secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
+
+# --- NEW GEOSPATIAL TAB ---
+with geo_tab:
+    st.header("🌍 Geospatial Sales View")
+    st.markdown("This map shows the total sales volume by country for the selected filters. Darker colors indicate higher sales volume.")
+    
+    if not filtered_df.empty:
+        # Group data by country and sum the quantity
+        country_sales = filtered_df.groupby(country_col)[quantity_col].sum().reset_index()
+
+        # Create the choropleth map
+        fig = px.choropleth(
+            country_sales,
+            locations=country_col,
+            locationmode='country names', # This tells plotly how to interpret the locations
+            color=quantity_col,
+            hover_name=country_col,
+            color_continuous_scale=px.colors.sequential.Plasma, # Color scale for the heatmap
+            title="Total Sales Volume by Country"
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("No data to display on the map for the current filter selection.")
+
+
 with comparison_tab:
+    # ... (code is unchanged) ...
     st.header("Timeframe Comparison")
     col1, col2 = st.columns(2)
     with col1:
@@ -223,7 +248,9 @@ with comparison_tab:
     with c2:
         st.metric("Period 2 Sales", f"{p2_sales:,.0f}", delta=f"{p2_sales - p1_sales:,.0f}")
         st.metric("Period 2 Customers", f"{p2_customers:,}", delta=f"{p2_customers - p1_customers:,}")
+
 with forecast_tab:
+    # ... (code is unchanged) ...
     st.header("Sales Forecasting")
     if st.button("Generate 90-Day Forecast"):
         with st.spinner("Training model..."):
@@ -235,66 +262,27 @@ with forecast_tab:
             fig = model.plot(forecast)
             st.pyplot(fig)
 
-
-# --- NEW CLV TAB ---
 with clv_tab:
+    # ... (code is unchanged) ...
     st.header("💎 Customer Lifetime Value (CLV) Prediction")
-    st.markdown("""
-    This analysis forecasts the future value of your customers based on their past transaction history. 
-    It helps identify customers who are likely to be the most valuable in the future. 
-    **Note:** This calculation can take a moment.
-    """)
-
-    # Let user define the prediction timeframe
+    st.markdown("This analysis forecasts the future value of your customers based on their past transaction history.")
     prediction_days = st.slider("Select prediction timeframe (days):", 30, 365, 90)
-
     if st.button("Calculate CLV"):
         if filtered_df.empty or filtered_df[customer_col].nunique() < 10:
-            st.warning("Not enough unique customer data in the selected timeframe to build a reliable CLV model. Please select a larger date range or more customers.")
+            st.warning("Not enough unique customer data to build a reliable CLV model. Please select a larger date range or more customers.")
         else:
             with st.spinner("Preparing data and training CLV models..."):
-                # 1. Prepare data for the lifetimes library
-                clv_df = summary_data_from_transaction_data(
-                    filtered_df,
-                    customer_id_col=customer_col,
-                    datetime_col=date_col,
-                    monetary_value_col=quantity_col,
-                    observation_period_end=pd.to_datetime(end_date)
-                )
-
-                # Filter out non-positive monetary values as required by the model
+                clv_df = summary_data_from_transaction_data(filtered_df, customer_id_col=customer_col, datetime_col=date_col, monetary_value_col=quantity_col, observation_period_end=pd.to_datetime(end_date))
                 clv_df = clv_df[clv_df['monetary_value'] > 0]
-
                 if clv_df.empty:
                     st.error("No customers with repeat purchases and positive monetary value found. Cannot calculate CLV.")
                 else:
-                    # 2. Train the BetaGeoFitter model on frequency and recency
                     bgf = BetaGeoFitter(penalizer_coef=0.0)
                     bgf.fit(clv_df['frequency'], clv_df['recency'], clv_df['T'])
-
-                    # 3. Train the GammaGammaFitter model on monetary value
                     ggf = GammaGammaFitter(penalizer_coef=0.0)
                     ggf.fit(clv_df['frequency'], clv_df['monetary_value'])
-
-                    # 4. Predict the CLV for the next X days
-                    clv_df['predicted_clv'] = ggf.customer_lifetime_value(
-                        bgf,
-                        clv_df['frequency'],
-                        clv_df['recency'],
-                        clv_df['T'],
-                        clv_df['monetary_value'],
-                        time=prediction_days, # Use the slider value
-                        discount_rate=0.01 # Monthly discount rate
-                    )
-
+                    clv_df['predicted_clv'] = ggf.customer_lifetime_value(bgf, clv_df['frequency'], clv_df['recency'], clv_df['T'], clv_df['monetary_value'], time=prediction_days, discount_rate=0.01)
                     st.success("CLV Calculation Complete!")
                     st.subheader(f"Top Customers by Predicted CLV over the next {prediction_days} days")
-                    
-                    # Display the results
                     clv_results = clv_df[['predicted_clv']].sort_values(by='predicted_clv', ascending=False).reset_index()
-                    st.dataframe(clv_results,
-                                 use_container_width=True,
-                                 hide_index=True,
-                                 column_config={
-                                     "predicted_clv": st.column_config.NumberColumn(format="%.2f")
-                                 })
+                    st.dataframe(clv_results, use_container_width=True, hide_index=True, column_config={"predicted_clv": st.column_config.NumberColumn(format="%.2f")})
