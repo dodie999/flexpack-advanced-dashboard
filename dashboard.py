@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from prophet import Prophet
 import openpyxl
+from lifetimes import BetaGeoFitter, GammaGammaFitter # <-- NEW
+from lifetimes.utils import summary_data_from_transaction_data # <-- NEW
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Comprehensive Sales Dashboard")
@@ -80,6 +82,7 @@ st.title("🚀 Comprehensive Sales Dashboard")
 
 # --- Sidebar ---
 with st.sidebar:
+    # ... (Sidebar code is unchanged) ...
     st.header("1. Upload Your Data")
     uploaded_file = st.file_uploader("Choose an Excel file", type="xlsx")
     if uploaded_file is None:
@@ -88,7 +91,6 @@ with st.sidebar:
     df_raw = load_data(uploaded_file)
     if df_raw is None:
         st.stop()
-
     st.header("2. Map Your Columns")
     all_columns = df_raw.columns.tolist()
     def find_default(name, options):
@@ -100,11 +102,9 @@ with st.sidebar:
     order_col = st.selectbox("Sales Order Column", all_columns, index=find_default('Sales order', all_columns))
     product_col = st.selectbox("Product Name Column", all_columns, index=find_default('Product name', all_columns))
     dom_exp_col = st.selectbox("Domestic/Export Column", all_columns, index=find_default('Domestic/Export', all_columns))
-    
     df = preprocess_data(df_raw, date_col, quantity_col, customer_col)
     if df is None:
         st.stop()
-
     st.header("3. Master Filters")
     start_date, end_date = st.date_input("Select Timeframe",
         value=(df[date_col].min().date(), df[date_col].max().date()),
@@ -127,9 +127,10 @@ if filtered_df.empty:
     st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast"]
-overview_tab, customer_tab, product_tab, comparison_tab, forecast_tab = st.tabs(tab_list)
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"] # <-- NEW TAB
+overview_tab, customer_tab, product_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list) # <-- NEW TAB
 
+# ... (Code for first 5 tabs is unchanged) ...
 with overview_tab:
     st.header("Dashboard Overview")
     total_volume = filtered_df[quantity_col].sum()
@@ -145,14 +146,9 @@ with overview_tab:
     monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('M').sum()
     fig = px.line(monthly_sales, title="Monthly Sales Volume")
     st.plotly_chart(fig, use_container_width=True)
-
-    # --- HISTORY SECTION ---
-    # Show history if a single customer/country is selected, or if any products are selected.
     if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0:
         st.markdown("---")
         st.header("Filtered Order History")
-        
-        # Determine the title based on the filter priority
         if len(selected_customers) == 1:
             st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
         elif len(selected_countries) == 1:
@@ -160,17 +156,10 @@ with overview_tab:
         elif len(selected_products) > 0:
             product_list_str = ", ".join(selected_products)
             st.subheader(f"Showing all orders for product(s): {product_list_str}")
-
-        # Define the columns to display
         history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]
-        
         display_cols = [col for col in history_columns if col in filtered_df.columns]
-        
         history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False)
-        
         st.dataframe(history_df, use_container_width=True, hide_index=True)
-
-# ... (The rest of the script for the other tabs remains exactly the same) ...
 with customer_tab:
     st.header("Customer Deep Dive Analysis")
     st.markdown("### High-Volume Customer Analysis")
@@ -183,7 +172,6 @@ with customer_tab:
             st.metric(f"Customers with > {volume_threshold:,} units", len(high_volume_customers))
             with st.expander("View High-Volume Customer List"):
                 st.dataframe(high_volume_customers.sort_values(ascending=False))
-    
     st.markdown("---")
     st.markdown("### Individual Customer Consumption")
     if not filtered_df[customer_col].empty:
@@ -196,7 +184,6 @@ with customer_tab:
             st.metric(f"Avg. Monthly Consumption for {selected_customer}", f"{avg_consumption:,.2f} units")
             fig = px.bar(customer_monthly_consumption, title=f"Monthly Purchases for {selected_customer}")
             st.plotly_chart(fig, use_container_width=True)
-
     st.markdown("---")
     st.markdown("### RFM Segmentation")
     if not filtered_df.empty:
@@ -205,7 +192,6 @@ with customer_tab:
         st.plotly_chart(fig, use_container_width=True)
         with st.expander("View Detailed RFM Data and Scores"):
             st.dataframe(rfm_results)
-
 with product_tab:
     st.header("Product Performance (Pareto 80/20 Analysis)")
     if not filtered_df.empty:
@@ -216,7 +202,6 @@ with product_tab:
         fig.add_trace(go.Bar(x=product_sales_df[product_col], y=product_sales_df[quantity_col], name='Volume'), secondary_y=False)
         fig.add_trace(go.Scatter(x=product_sales_df[product_col], y=product_sales_df['Cumulative_Percentage'], name='Cumulative %'), secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
-
 with comparison_tab:
     st.header("Timeframe Comparison")
     col1, col2 = st.columns(2)
@@ -224,14 +209,12 @@ with comparison_tab:
         p1_start, p1_end = st.date_input("Period 1", value=(df[date_col].min().date(), df[date_col].min().date() + pd.Timedelta(days=365)), key="p1")
     with col2:
         p2_start, p2_end = st.date_input("Period 2", value=(df[date_col].max().date() - pd.Timedelta(days=365), df[date_col].max().date()), key="p2")
-
     period1_df = df[(df[date_col].dt.date >= p1_start) & (df[date_col].dt.date <= p1_end)]
     period2_df = df[(df[date_col].dt.date >= p2_start) & (df[date_col].dt.date <= p2_end)]
     p1_sales = period1_df[quantity_col].sum()
     p2_sales = period2_df[quantity_col].sum()
     p1_customers = period1_df[customer_col].nunique()
     p2_customers = period2_df[customer_col].nunique()
-
     st.subheader("Comparison Results")
     c1, c2 = st.columns(2)
     with c1:
@@ -240,7 +223,6 @@ with comparison_tab:
     with c2:
         st.metric("Period 2 Sales", f"{p2_sales:,.0f}", delta=f"{p2_sales - p1_sales:,.0f}")
         st.metric("Period 2 Customers", f"{p2_customers:,}", delta=f"{p2_customers - p1_customers:,}")
-
 with forecast_tab:
     st.header("Sales Forecasting")
     if st.button("Generate 90-Day Forecast"):
@@ -252,3 +234,67 @@ with forecast_tab:
             forecast = model.predict(future)
             fig = model.plot(forecast)
             st.pyplot(fig)
+
+
+# --- NEW CLV TAB ---
+with clv_tab:
+    st.header("💎 Customer Lifetime Value (CLV) Prediction")
+    st.markdown("""
+    This analysis forecasts the future value of your customers based on their past transaction history. 
+    It helps identify customers who are likely to be the most valuable in the future. 
+    **Note:** This calculation can take a moment.
+    """)
+
+    # Let user define the prediction timeframe
+    prediction_days = st.slider("Select prediction timeframe (days):", 30, 365, 90)
+
+    if st.button("Calculate CLV"):
+        if filtered_df.empty or filtered_df[customer_col].nunique() < 10:
+            st.warning("Not enough unique customer data in the selected timeframe to build a reliable CLV model. Please select a larger date range or more customers.")
+        else:
+            with st.spinner("Preparing data and training CLV models..."):
+                # 1. Prepare data for the lifetimes library
+                clv_df = summary_data_from_transaction_data(
+                    filtered_df,
+                    customer_id_col=customer_col,
+                    datetime_col=date_col,
+                    monetary_value_col=quantity_col,
+                    observation_period_end=pd.to_datetime(end_date)
+                )
+
+                # Filter out non-positive monetary values as required by the model
+                clv_df = clv_df[clv_df['monetary_value'] > 0]
+
+                if clv_df.empty:
+                    st.error("No customers with repeat purchases and positive monetary value found. Cannot calculate CLV.")
+                else:
+                    # 2. Train the BetaGeoFitter model on frequency and recency
+                    bgf = BetaGeoFitter(penalizer_coef=0.0)
+                    bgf.fit(clv_df['frequency'], clv_df['recency'], clv_df['T'])
+
+                    # 3. Train the GammaGammaFitter model on monetary value
+                    ggf = GammaGammaFitter(penalizer_coef=0.0)
+                    ggf.fit(clv_df['frequency'], clv_df['monetary_value'])
+
+                    # 4. Predict the CLV for the next X days
+                    clv_df['predicted_clv'] = ggf.customer_lifetime_value(
+                        bgf,
+                        clv_df['frequency'],
+                        clv_df['recency'],
+                        clv_df['T'],
+                        clv_df['monetary_value'],
+                        time=prediction_days, # Use the slider value
+                        discount_rate=0.01 # Monthly discount rate
+                    )
+
+                    st.success("CLV Calculation Complete!")
+                    st.subheader(f"Top Customers by Predicted CLV over the next {prediction_days} days")
+                    
+                    # Display the results
+                    clv_results = clv_df[['predicted_clv']].sort_values(by='predicted_clv', ascending=False).reset_index()
+                    st.dataframe(clv_results,
+                                 use_container_width=True,
+                                 hide_index=True,
+                                 column_config={
+                                     "predicted_clv": st.column_config.NumberColumn(format="%.2f")
+                                 })
