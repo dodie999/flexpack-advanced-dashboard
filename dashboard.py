@@ -37,13 +37,11 @@ def preprocess_data(df, date_col, quantity_col, customer_col):
         return None
 
 # --- Analytical Functions ---
-# ### NEW AND IMPROVED RFM FUNCTION ###
 @st.cache_data
 def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     """
-    Calculates RFM metrics and segments customers using a robust and clear method.
+    Calculates RFM metrics and segments customers. Handles cases with few customers.
     """
-    # 1. Calculate R, F, M values
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
     rfm_df = df.groupby(customer_col).agg({
         date_col: lambda date: (snapshot_date - date.max()).days,
@@ -51,36 +49,31 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
         quantity_col: 'sum'
     }).rename(columns={date_col: 'Recency', order_col: 'Frequency', quantity_col: 'Monetary'})
 
-    # 2. Create Scores - Handles cases with non-unique bin edges
+    if rfm_df.shape[0] < 4:
+        rfm_df['R_Score'] = 4
+        rfm_df['F_Score'] = 4
+        rfm_df['M_Score'] = 4
+        rfm_df['RFM_Score'] = '444'
+        rfm_df['Segment'] = 'Individual Analysis'
+        return rfm_df
+
     rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
     rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
-
-    # 3. Combine scores for segmentation
     rfm_df['RFM_Score'] = rfm_df['R_Score'].astype(str) + rfm_df['F_Score'].astype(str) + rfm_df['M_Score'].astype(str)
 
-    # 4. Define segments based on clear, combined score logic
-    # This mapping is ordered from highest priority (Champions) to lowest.
-    seg_map = {
-        r'[3-4][3-4][3-4]': 'Champions',
-        r'[3-4]4[1-2]': 'Champions (Low Spenders)',
-        r'4[1-3][1-4]': 'New Customers',
-        r'3[1-3][1-4]': 'Recent Customers',
-        r'[1-2][3-4][3-4]': 'At Risk (High Value)',
-        r'[1-2]2[1-4]': 'At Risk (Slipping)',
-        r'[1-2]1[1-4]': 'Hibernating',
-        r'2[3-4][1-4]': 'Potential Loyalists',
-        r'[3-4][1-2][1-4]': 'Promising'
-    }
+    def segment_customer(row):
+        if row['R_Score'] == 4 and row['F_Score'] == 4 and row['M_Score'] == 4: return 'Champions'
+        if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Loyal Customers'
+        if row['R_Score'] >= 3 and row['Frequency'] > 1: return 'Potential Loyalists'
+        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'New Customers'
+        if row['R_Score'] == 3 and row['F_Score'] == 1: return 'Promising'
+        if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At Risk'
+        if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating'
+        return 'Regular'
 
-    # Default to 'Regular' if no specific segment is matched
-    rfm_df['Segment'] = 'Regular'
-    # Use regex to map the combined RFM score string to a segment
-    for pattern, segment_name in seg_map.items():
-        rfm_df.loc[rfm_df['RFM_Score'].str.match(pattern), 'Segment'] = segment_name
-        
+    rfm_df['Segment'] = rfm_df.apply(segment_customer, axis=1)
     return rfm_df
-
 
 # --- Main App ---
 st.title("🚀 Comprehensive Sales Dashboard")
@@ -102,12 +95,12 @@ with st.sidebar:
         return options.index(name) if name in options else 0
     date_col = st.selectbox("Date Column", all_columns, index=find_default('Ship date', all_columns))
     customer_col = st.selectbox("Customer Name Column", all_columns, index=find_default('Customer name', all_columns))
+    country_col = st.selectbox("Country Column", all_columns, index=find_default('Country', all_columns))
     quantity_col = st.selectbox("Quantity Column", all_columns, index=find_default('Quantity', all_columns))
     order_col = st.selectbox("Sales Order Column", all_columns, index=find_default('Sales order', all_columns))
     product_col = st.selectbox("Product Name Column", all_columns, index=find_default('Product name', all_columns))
     dom_exp_col = st.selectbox("Domestic/Export Column", all_columns, index=find_default('Domestic/Export', all_columns))
-    country_col = st.selectbox("Country Column", all_columns, index=find_default('Country', all_columns))
-
+    
     df = preprocess_data(df_raw, date_col, quantity_col, customer_col)
     if df is None:
         st.stop()
@@ -117,18 +110,17 @@ with st.sidebar:
         value=(df[date_col].min().date(), df[date_col].max().date()),
         min_value=df[date_col].min().date(), max_value=df[date_col].max().date()
     )
-    selected_customers = st.multiselect("Filter by Customer", options=sorted(df[customer_col].unique()), default=[])
-    selected_products = st.multiselect("Filter by Product", options=sorted(df[product_col].unique()), default=[])
-    selected_dom_exp = st.multiselect("Filter by Domestic/Export", options=sorted(df[dom_exp_col].unique()), default=[])
-# New, corrected line
-country_options = sorted([str(country) for country in df[country_col].unique()])
-selected_countries = st.multiselect("Filter by Country", options=country_options, default=[])
+    selected_customers = st.multiselect("Filter by Customer", options=sorted([str(c) for c in df[customer_col].unique()]), default=[])
+    selected_products = st.multiselect("Filter by Product", options=sorted([str(p) for p in df[product_col].unique()]), default=[])
+    selected_dom_exp = st.multiselect("Filter by Domestic/Export", options=sorted([str(de) for de in df[dom_exp_col].unique()]), default=[])
+    selected_countries = st.multiselect("Filter by Country", options=sorted([str(c) for c in df[country_col].unique()]), default=[])
+
 # --- Filtering Logic ---
 mask = (df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)
-if selected_customers: mask &= (df[customer_col].isin(selected_customers))
-if selected_products: mask &= (df[product_col].isin(selected_products))
-if selected_dom_exp: mask &= (df[dom_exp_col].isin(selected_dom_exp))
-if selected_countries: mask &= (df[country_col].isin(selected_countries))
+if selected_customers: mask &= df[customer_col].isin(selected_customers)
+if selected_products: mask &= df[product_col].isin(selected_products)
+if selected_dom_exp: mask &= df[dom_exp_col].isin(selected_dom_exp)
+if selected_countries: mask &= df[country_col].isin(selected_countries)
 filtered_df = df[mask]
 if filtered_df.empty:
     st.warning("No data matches the selected filters.")
@@ -139,7 +131,6 @@ tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis",
 overview_tab, customer_tab, product_tab, comparison_tab, forecast_tab = st.tabs(tab_list)
 
 with overview_tab:
-    # ... (code for this tab is unchanged) ...
     st.header("Dashboard Overview")
     total_volume = filtered_df[quantity_col].sum()
     unique_customers = filtered_df[customer_col].nunique()
@@ -155,10 +146,33 @@ with overview_tab:
     fig = px.line(monthly_sales, title="Monthly Sales Volume")
     st.plotly_chart(fig, use_container_width=True)
 
+    # --- HISTORY SECTION ---
+    # Show history if a single customer/country is selected, or if any products are selected.
+    if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0:
+        st.markdown("---")
+        st.header("Filtered Order History")
+        
+        # Determine the title based on the filter priority
+        if len(selected_customers) == 1:
+            st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
+        elif len(selected_countries) == 1:
+            st.subheader(f"Showing all orders for country: {selected_countries[0]}")
+        elif len(selected_products) > 0:
+            product_list_str = ", ".join(selected_products)
+            st.subheader(f"Showing all orders for product(s): {product_list_str}")
 
+        # Define the columns to display
+        history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]
+        
+        display_cols = [col for col in history_columns if col in filtered_df.columns]
+        
+        history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False)
+        
+        st.dataframe(history_df, use_container_width=True, hide_index=True)
+
+# ... (The rest of the script for the other tabs remains exactly the same) ...
 with customer_tab:
     st.header("Customer Deep Dive Analysis")
-    # ... (code for High-Volume and Individual Customer is unchanged) ...
     st.markdown("### High-Volume Customer Analysis")
     if not filtered_df.empty:
         customer_volumes = filtered_df.groupby(customer_col)[quantity_col].sum()
@@ -173,9 +187,9 @@ with customer_tab:
     st.markdown("---")
     st.markdown("### Individual Customer Consumption")
     if not filtered_df[customer_col].empty:
-        selected_customer = st.selectbox("Select a customer to analyze:", options=sorted(filtered_df[customer_col].unique()))
+        customer_options = sorted(filtered_df[customer_col].unique())
+        selected_customer = st.selectbox("Select a customer to analyze:", options=customer_options)
         if selected_customer:
-            # ... (code for individual plot unchanged)
             customer_data = filtered_df[filtered_df[customer_col] == selected_customer]
             customer_monthly_consumption = customer_data.set_index(date_col)[quantity_col].resample('M').sum()
             avg_consumption = customer_monthly_consumption.mean()
@@ -189,13 +203,9 @@ with customer_tab:
         rfm_results = calculate_rfm(filtered_df, date_col, customer_col, quantity_col, order_col)
         fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Count by RFM Segment")
         st.plotly_chart(fig, use_container_width=True)
-        
-        # --- NEW: Add expander for detailed RFM data ---
         with st.expander("View Detailed RFM Data and Scores"):
-            st.dataframe(rfm_results[['Segment', 'Recency', 'Frequency', 'Monetary', 'R_Score', 'F_Score', 'M_Score', 'RFM_Score']].sort_values(by='RFM_Score', ascending=False))
+            st.dataframe(rfm_results)
 
-
-# ... (The rest of the script for other tabs is unchanged) ...
 with product_tab:
     st.header("Product Performance (Pareto 80/20 Analysis)")
     if not filtered_df.empty:
