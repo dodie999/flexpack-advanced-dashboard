@@ -45,6 +45,9 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     """
     Calculates RFM metrics and segments customers. Handles cases with few customers.
     """
+    if df.empty or df[customer_col].nunique() == 0:
+        return pd.DataFrame()
+
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
     rfm_df = df.groupby(customer_col).agg({
         date_col: lambda date: (snapshot_date - date.max()).days,
@@ -113,96 +116,65 @@ filtered_df = df[mask]
 if filtered_df.empty: st.warning("No data matches the selected filters."); st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🌍 Geospatial View", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
-overview_tab, customer_tab, product_tab, geo_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
+overview_tab, customer_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
 
 with overview_tab:
-    st.header("Dashboard Overview")
-    total_volume = filtered_df[quantity_col].sum(); unique_customers = filtered_df[customer_col].nunique()
-    new_customers_mask = df.groupby(customer_col)[date_col].min().between(pd.to_datetime(start_date), pd.to_datetime(end_date))
-    new_customer_count = new_customers_mask.sum()
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total Sales Volume", f"{total_volume:,.0f}"); col2.metric("Unique Customers", f"{unique_customers:,}"); col3.metric("New Customers in Period", f"{new_customer_count:,}")
-    st.markdown("---"); st.header("Sales Trend")
-    monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('M').sum()
+    st.header("Dashboard Overview"); total_volume = filtered_df[quantity_col].sum(); unique_customers = filtered_df[customer_col].nunique()
+    new_customers_mask = df.groupby(customer_col)[date_col].min().between(pd.to_datetime(start_date), pd.to_datetime(end_date)); new_customer_count = new_customers_mask.sum()
+    col1, col2, col3 = st.columns(3); col1.metric("Total Sales Volume", f"{total_volume:,.0f}"); col2.metric("Unique Customers", f"{unique_customers:,}"); col3.metric("New Customers in Period", f"{new_customer_count:,}")
+    st.markdown("---"); st.header("Sales Trend"); monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('M').sum()
     fig = px.line(monthly_sales, title="Monthly Sales Volume"); st.plotly_chart(fig, use_container_width=True)
     if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0:
         st.markdown("---"); st.header("Filtered Order History")
         if len(selected_customers) == 1: st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
         elif len(selected_countries) == 1: st.subheader(f"Showing all orders for country: {selected_countries[0]}")
         elif len(selected_products) > 0: st.subheader(f"Showing all orders for product(s): {', '.join(selected_products)}")
-        history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]
-        display_cols = [col for col in history_columns if col in filtered_df.columns]
-        history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False)
-        st.dataframe(history_df, use_container_width=True, hide_index=True)
+        history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]; display_cols = [col for col in history_columns if col in filtered_df.columns]
+        history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False); st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 with customer_tab:
-    st.header("Customer Deep Dive Analysis")
-    st.markdown("### High-Volume Customer Analysis")
+    st.header("Customer Deep Dive Analysis"); st.markdown("### High-Volume Customer Analysis")
     if not filtered_df.empty:
         customer_volumes = filtered_df.groupby(customer_col)[quantity_col].sum()
         if not customer_volumes.empty:
             max_volume = int(customer_volumes.max())
             volume_threshold = st.slider("Minimum Total Quantity per Customer:", min_value=0, max_value=max_volume, value=int(max_volume/4))
-            high_volume_customers = customer_volumes[customer_volumes > volume_threshold]
-            st.metric(f"Customers with > {volume_threshold:,} units", len(high_volume_customers))
+            high_volume_customers = customer_volumes[customer_volumes > volume_threshold]; st.metric(f"Customers with > {volume_threshold:,} units", len(high_volume_customers))
             with st.expander("View High-Volume Customer List"): st.dataframe(high_volume_customers.sort_values(ascending=False))
-    st.markdown("---")
-    st.markdown("### Individual Customer Consumption")
+    st.markdown("---"); st.markdown("### Individual Customer Consumption")
     if not filtered_df[customer_col].empty:
         customer_options = sorted(filtered_df[customer_col].unique())
         selected_customer = st.selectbox("Select a customer to analyze:", options=customer_options)
         if selected_customer:
-            customer_data = filtered_df[filtered_df[customer_col] == selected_customer]
-            customer_monthly_consumption = customer_data.set_index(date_col)[quantity_col].resample('M').sum()
-            avg_consumption = customer_monthly_consumption.mean()
-            st.metric(f"Avg. Monthly Consumption for {selected_customer}", f"{avg_consumption:,.2f} units")
-            fig = px.bar(customer_monthly_consumption, title=f"Monthly Purchases for {selected_customer}")
-            st.plotly_chart(fig, use_container_width=True)
-    st.markdown("---")
-    st.markdown("### RFM Segmentation")
+            customer_data = filtered_df[filtered_df[customer_col] == selected_customer]; customer_monthly_consumption = customer_data.set_index(date_col)[quantity_col].resample('M').sum()
+            avg_consumption = customer_monthly_consumption.mean(); st.metric(f"Avg. Monthly Consumption for {selected_customer}", f"{avg_consumption:,.2f} units")
+            fig = px.bar(customer_monthly_consumption, title=f"Monthly Purchases for {selected_customer}"); st.plotly_chart(fig, use_container_width=True)
+    st.markdown("---"); st.markdown("### RFM Segmentation")
     if not filtered_df.empty:
         rfm_results = calculate_rfm(filtered_df, date_col, customer_col, quantity_col, order_col)
-        fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Count by RFM Segment")
-        st.plotly_chart(fig, use_container_width=True)
+        fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Count by RFM Segment"); st.plotly_chart(fig, use_container_width=True)
         with st.expander("View Detailed RFM Data and Scores"): st.dataframe(rfm_results)
 
 with product_tab:
     st.header("Product Performance (Pareto 80/20 Analysis)")
     if not filtered_df.empty:
         product_sales = filtered_df.groupby(product_col)[quantity_col].sum().sort_values(ascending=False)
-        product_sales_df = product_sales.reset_index()
-        product_sales_df['Cumulative_Percentage'] = (product_sales_df[quantity_col].cumsum() / product_sales_df[quantity_col].sum()) * 100
+        product_sales_df = product_sales.reset_index(); product_sales_df['Cumulative_Percentage'] = (product_sales_df[quantity_col].cumsum() / product_sales_df[quantity_col].sum()) * 100
         fig = make_subplots(specs=[[{"secondary_y": True}]]); fig.add_trace(go.Bar(x=product_sales_df[product_col], y=product_sales_df[quantity_col], name='Volume'), secondary_y=False); fig.add_trace(go.Scatter(x=product_sales_df[product_col], y=product_sales_df['Cumulative_Percentage'], name='Cumulative %'), secondary_y=True)
         st.plotly_chart(fig, use_container_width=True)
 
-with geo_tab:
-    st.header("🌍 Geospatial Sales View")
-    st.markdown("This map shows the total sales volume by country for the selected filters.")
-    if not filtered_df.empty:
-        country_sales = filtered_df.groupby(country_col)[quantity_col].sum().reset_index()
-        fig = px.choropleth(country_sales, locations=country_col, locationmode='country names', color=quantity_col, hover_name=country_col, color_continuous_scale=px.colors.sequential.Plasma, title="Total Sales Volume by Country")
-        st.plotly_chart(fig, use_container_width=True)
-    else: st.warning("No data to display on the map.")
-
 with sample_tab:
-    st.header("🔬 Sample Conversion Analysis")
-    st.markdown("This tool identifies samples based on the combined quantity of related products (e.g., 7000A + 7000C) within a single order.")
+    st.header("🔬 Sample Conversion Analysis"); st.markdown("This tool identifies samples based on the combined quantity of related products within a single order.")
     sample_threshold = st.number_input("Set the maximum combined quantity for a 'sample' (in kg):", min_value=1, value=200)
-    df_analysis = df.copy()
-    df_analysis['Product_Base'] = df_analysis[product_col].str.extract(r'(\d+)')
-    df_analysis.dropna(subset=['Product_Base'], inplace=True)
+    df_analysis = df.copy(); df_analysis['Product_Base'] = df_analysis[product_col].str.extract(r'(\d+)'); df_analysis.dropna(subset=['Product_Base'], inplace=True)
     df_analysis['Combined_Order_Quantity'] = df_analysis.groupby([order_col, 'Product_Base'])[quantity_col].transform('sum')
     df_analysis['Order_Type'] = np.where(df_analysis['Combined_Order_Quantity'] < sample_threshold, 'Sample', 'Regular Order')
-    samples_df = df_analysis[df_analysis['Order_Type'] == 'Sample']
-    regular_orders_df = df_analysis[df_analysis['Order_Type'] == 'Regular Order']
-    if samples_df.empty:
-        st.info("No sample orders found within the specified threshold in the dataset.")
+    samples_df = df_analysis[df_analysis['Order_Type'] == 'Sample']; regular_orders_df = df_analysis[df_analysis['Order_Type'] == 'Regular Order']
+    if samples_df.empty: st.info("No sample orders found.")
     else:
-        customers_in_view = filtered_df[customer_col].unique()
-        sampled_customers_total = samples_df[samples_df[customer_col].isin(customers_in_view)][customer_col].unique()
-        if len(sampled_customers_total) == 0:
-            st.info("No customers who have received samples are present in the current filter.")
+        customers_in_view = filtered_df[customer_col].unique(); sampled_customers_total = samples_df[samples_df[customer_col].isin(customers_in_view)][customer_col].unique()
+        if len(sampled_customers_total) == 0: st.info("No customers who have received samples are present in the current filter.")
         else:
             conversion_data = []
             for customer in sampled_customers_total:
@@ -214,35 +186,15 @@ with sample_tab:
                     days_to_convert = (first_conversion_date - first_sample_date).days
                     post_conversion_volume = converted_orders[quantity_col].sum()
                 conversion_data.append({'Customer': customer, 'Conversion Status': status, 'First Sample Date': first_sample_date.date(), 'Days to Convert': days_to_convert, 'Post-Conversion Volume': post_conversion_volume})
-            conversion_df = pd.DataFrame(conversion_data)
-            st.subheader("Conversion Summary"); col1, col2, col3 = st.columns(3)
-            converted_count = conversion_df[conversion_df['Conversion Status'] == 'Converted'].shape[0]
-            total_sampled_count = len(sampled_customers_total)
+            conversion_df = pd.DataFrame(conversion_data); st.subheader("Conversion Summary"); col1, col2, col3 = st.columns(3)
+            converted_count = conversion_df[conversion_df['Conversion Status'] == 'Converted'].shape[0]; total_sampled_count = len(sampled_customers_total)
             conversion_rate = (converted_count / total_sampled_count * 100) if total_sampled_count > 0 else 0
             col1.metric("Sampled Customers (in view)", f"{total_sampled_count}"); col2.metric("Converted Customers", f"{converted_count}"); col3.metric("Conversion Rate", f"{conversion_rate:.1f}%")
-            st.subheader("Customer Conversion Details")
-            st.dataframe(conversion_df.sort_values(by="Post-Conversion Volume", ascending=False), use_container_width=True, hide_index=True)
-            
+            st.subheader("Customer Conversion Details"); st.dataframe(conversion_df.sort_values(by="Post-Conversion Volume", ascending=False), use_container_width=True, hide_index=True)
             with st.expander("View All Sample Line Items (in current filter)"):
-                # --- THIS IS THE MODIFIED PART ---
-                samples_in_view_df = df_analysis[
-                    (df_analysis['Order_Type'] == 'Sample') & 
-                    (df_analysis[customer_col].isin(customers_in_view))
-                ]
-                
-                # Define the exact columns you want to show
-                sample_display_cols = [
-                    date_col, customer_col, country_col, product_col, quantity_col, 
-                    'Product_Base', 'Combined_Order_Quantity', 'Order_Type'
-                ]
-                
-                # Filter the DataFrame to show only these columns and sort by date
-                st.dataframe(
-                    samples_in_view_df[sample_display_cols].sort_values(by=date_col, ascending=False), 
-                    use_container_width=True, 
-                    hide_index=True
-                )
-                # --- END OF MODIFICATION ---
+                samples_in_view_df = df_analysis[(df_analysis['Order_Type'] == 'Sample') & (df_analysis[customer_col].isin(customers_in_view))]
+                sample_display_cols = [date_col, customer_col, country_col, product_col, quantity_col, 'Product_Base', 'Combined_Order_Quantity', 'Order_Type']
+                st.dataframe(samples_in_view_df[sample_display_cols].sort_values(by=date_col, ascending=False), use_container_width=True, hide_index=True)
 
 with comparison_tab:
     st.header("Timeframe Comparison"); col1, col2 = st.columns(2)
