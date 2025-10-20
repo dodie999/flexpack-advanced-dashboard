@@ -95,21 +95,27 @@ with st.sidebar:
     country_col = st.selectbox("Country Column", all_columns, index=find_default('Country', all_columns))
     quantity_col = st.selectbox("Quantity Column", all_columns, index=find_default('Quantity', all_columns))
     order_col = st.selectbox("Sales Order Column", all_columns, index=find_default('Sales order', all_columns))
+    product_group_col = st.selectbox("Product Group Column", all_columns, index=find_default('Product', all_columns)) # <-- NEW
     product_col = st.selectbox("Product Name Column", all_columns, index=find_default('Product name', all_columns))
+    salesman_col = st.selectbox("Salesman Column", all_columns, index=find_default('Salesman', all_columns))
     dom_exp_col = st.selectbox("Domestic/Export Column", all_columns, index=find_default('Domestic/Export', all_columns))
     df = preprocess_data(df_raw, date_col, quantity_col, customer_col)
     if df is None: st.stop()
     st.header("3. Master Filters")
     start_date, end_date = st.date_input("Select Timeframe", value=(df[date_col].min().date(), df[date_col].max().date()), min_value=df[date_col].min().date(), max_value=df[date_col].max().date())
     selected_customers = st.multiselect("Filter by Customer", options=sorted([str(c) for c in df[customer_col].unique()]), default=[])
-    selected_products = st.multiselect("Filter by Product", options=sorted([str(p) for p in df[product_col].unique()]), default=[])
+    selected_product_groups = st.multiselect("Filter by Product Group", options=sorted([str(pg) for pg in df[product_group_col].unique()]), default=[]) # <-- NEW
+    selected_products = st.multiselect("Filter by Product Name", options=sorted([str(p) for p in df[product_col].unique()]), default=[]) # <-- MODIFIED LABEL
+    selected_salesmen = st.multiselect("Filter by Salesman", options=sorted([str(s) for s in df[salesman_col].unique()]), default=[])
     selected_dom_exp = st.multiselect("Filter by Domestic/Export", options=sorted([str(de) for de in df[dom_exp_col].unique()]), default=[])
     selected_countries = st.multiselect("Filter by Country", options=sorted([str(c) for c in df[country_col].unique()]), default=[])
 
 # --- Filtering Logic ---
 mask = (df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)
 if selected_customers: mask &= df[customer_col].isin(selected_customers)
+if selected_product_groups: mask &= df[product_group_col].isin(selected_product_groups) # <-- NEW
 if selected_products: mask &= df[product_col].isin(selected_products)
+if selected_salesmen: mask &= df[salesman_col].isin(selected_salesmen)
 if selected_dom_exp: mask &= df[dom_exp_col].isin(selected_dom_exp)
 if selected_countries: mask &= df[country_col].isin(selected_countries)
 filtered_df = df[mask]
@@ -125,12 +131,14 @@ with overview_tab:
     col1, col2, col3 = st.columns(3); col1.metric("Total Sales Volume", f"{total_volume:,.0f}"); col2.metric("Unique Customers", f"{unique_customers:,}"); col3.metric("New Customers in Period", f"{new_customer_count:,}")
     st.markdown("---"); st.header("Sales Trend"); monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('M').sum()
     fig = px.line(monthly_sales, title="Monthly Sales Volume"); st.plotly_chart(fig, use_container_width=True)
-    if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0:
+    if len(selected_customers) == 1 or len(selected_countries) == 1 or len(selected_products) > 0 or len(selected_salesmen) == 1:
         st.markdown("---"); st.header("Filtered Order History")
         if len(selected_customers) == 1: st.subheader(f"Showing all orders for customer: {selected_customers[0]}")
         elif len(selected_countries) == 1: st.subheader(f"Showing all orders for country: {selected_countries[0]}")
+        elif len(selected_salesmen) == 1: st.subheader(f"Showing all orders for salesman: {selected_salesmen[0]}")
         elif len(selected_products) > 0: st.subheader(f"Showing all orders for product(s): {', '.join(selected_products)}")
-        history_columns = [date_col, customer_col, country_col, product_col, quantity_col, order_col]; display_cols = [col for col in history_columns if col in filtered_df.columns]
+        history_columns = [date_col, customer_col, country_col, product_group_col, product_col, salesman_col, quantity_col, order_col] # <-- MODIFIED
+        display_cols = [col for col in history_columns if col in filtered_df.columns]
         history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False); st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 with customer_tab:
