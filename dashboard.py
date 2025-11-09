@@ -79,7 +79,7 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     rfm_df['Segment'] = rfm_df.apply(segment_customer, axis=1)
     return rfm_df
 
-# --- NEW: Country "FM" Function (Idea FM) ---
+# --- MODIFIED: Country "FM" Function (Idea FM) ---
 @st.cache_data
 def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, active_period_months):
     """
@@ -107,14 +107,27 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
     
     # Calculate Active Customer Breadth (F-Score)
     active_customers_per_country = active_df.groupby(country_col)[customer_col].nunique()
-    # Join it with the main rfm_df, fill with 0 for countries with no active customers
+    # --- NEW: Calculate Total Customer Breadth ---
+    total_customers_per_country = df.groupby(country_col)[customer_col].nunique()
+
+    # Join both to the main rfm_df
     rfm_df = rfm_df.join(active_customers_per_country.rename('Frequency_Active_Breadth')).fillna(0)
+    rfm_df = rfm_df.join(total_customers_per_country.rename('Frequency_Total_Breadth')).fillna(0)
+
+    # Convert counts to integer
+    rfm_df['Frequency_Active_Breadth'] = rfm_df['Frequency_Active_Breadth'].astype(int)
+    rfm_df['Frequency_Total_Breadth'] = rfm_df['Frequency_Total_Breadth'].astype(int)
+
+    # --- NEW: Create the display ratio string ---
+    rfm_df['Frequency_Ratio'] = rfm_df['Frequency_Active_Breadth'].astype(str) + ' / ' + rfm_df['Frequency_Total_Breadth'].astype(str)
+
 
     if rfm_df.shape[0] < 4:
         rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
         rfm_df['RFM_Score'] = '444'; rfm_df['Segment'] = 'Single Market'
         return rfm_df
 
+    # Scoring remains based on the *active* customer count
     rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
     rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency_Active_Breadth'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary_Volume'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
@@ -122,7 +135,7 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
 
     def segment_market(row):
         if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Healthy Markets'
-        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Single Customer Market' # 411 from our example
+        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Single Customer Market'
         if row['R_Score'] >= 3 and row['F_Score'] == 1: return 'Promising Markets'
         if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At-Risk (High Breadth)'
         if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating Markets'
@@ -130,7 +143,7 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
 
     rfm_df['Segment'] = rfm_df.apply(segment_market, axis=1)
     return rfm_df
-# --- END NEW FUNCTION ---
+# --- END MODIFIED FUNCTION ---
 
 
 # --- Main App ---
@@ -229,11 +242,11 @@ with country_analysis_tab:
     * **Monetary (M):** What is the total sales volume (size)? (from total period)
     """)
     
-    # NEW: Active Period Slider
     active_months = st.slider("Define 'Active Period' (in months):", 1, 24, 6)
 
     if not filtered_df.empty:
-        country_rfm_results = calculate_country_fm(filtered_df, date_col, country_col, quantity_col, customer_col, active_months)
+        # Use the *unfiltered* df for a complete historical analysis
+        country_rfm_results = calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, active_months)
         
         if country_rfm_results.empty:
             st.warning("Not enough data to perform country analysis.")
@@ -243,7 +256,32 @@ with country_analysis_tab:
             st.plotly_chart(fig, use_container_width=True)
             
             with st.expander("View Detailed Market Scores"):
-                st.dataframe(country_rfm_results.sort_values(by='RFM_Score', ascending=False), use_container_width=True)
+                # Rename columns for a cleaner display
+                display_df = country_rfm_results.rename(columns={
+                    'Recency': 'Recency (Days)',
+                    'Frequency_Ratio': 'Active / Total Customers',
+                    'Monetary_Volume': 'Total Volume'
+                })
+                
+                # Define the columns we want to show
+                display_cols = [
+                    'Segment', 
+                    'Recency (Days)', 
+                    'Active / Total Customers', 
+                    'Total Volume', 
+                    'R_Score', 
+                    'F_Score', 
+                    'M_Score',
+                    'RFM_Score'
+                ]
+                
+                # Ensure all desired columns exist in the dataframe
+                final_display_cols = [col for col in display_cols if col in display_df.columns]
+                
+                st.dataframe(
+                    display_df[final_display_cols].sort_values(by='RFM_Score', ascending=False), 
+                    use_container_width=True
+                )
 
 with product_tab:
     st.header("📦 Product Performance (Pareto 80/20 Analysis)")
