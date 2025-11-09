@@ -99,15 +99,15 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
     # Create the "active" dataframe
     active_df = df[df[date_col] >= active_cutoff_date]
 
-    # Calculate metrics
+    # Calculate base metrics
     rfm_df = df.groupby(country_col).agg(
         Recency=(date_col, lambda date: (snapshot_date - date.max()).days),
         Monetary_Volume=(quantity_col, 'sum')
     )
     
-    # Calculate Active Customer Breadth (F-Score)
+    # Calculate Active Customer Breadth
     active_customers_per_country = active_df.groupby(country_col)[customer_col].nunique()
-    # --- NEW: Calculate Total Customer Breadth ---
+    # Calculate Total Customer Breadth
     total_customers_per_country = df.groupby(country_col)[customer_col].nunique()
 
     # Join both to the main rfm_df
@@ -118,9 +118,9 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
     rfm_df['Frequency_Active_Breadth'] = rfm_df['Frequency_Active_Breadth'].astype(int)
     rfm_df['Frequency_Total_Breadth'] = rfm_df['Frequency_Total_Breadth'].astype(int)
 
-    # --- NEW: Create the display ratio string ---
-    rfm_df['Frequency_Ratio'] = rfm_df['Frequency_Active_Breadth'].astype(str) + ' / ' + rfm_df['Frequency_Total_Breadth'].astype(str)
-
+    # --- NEW: Create the new index format ---
+    rfm_df.index = rfm_df.index.astype(str) + ' (' + rfm_df['Frequency_Total_Breadth'].astype(str) + ')'
+    # --- END NEW ---
 
     if rfm_df.shape[0] < 4:
         rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
@@ -144,7 +144,6 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
     rfm_df['Segment'] = rfm_df.apply(segment_market, axis=1)
     return rfm_df
 # --- END MODIFIED FUNCTION ---
-
 
 # --- Main App ---
 st.title("🚀 Comprehensive Sales Dashboard")
@@ -259,7 +258,7 @@ with country_analysis_tab:
                 # Rename columns for a cleaner display
                 display_df = country_rfm_results.rename(columns={
                     'Recency': 'Recency (Days)',
-                    'Frequency_Ratio': 'Active / Total Customers',
+                    'Frequency_Active_Breadth': 'Active Customers', # <-- MODIFIED
                     'Monetary_Volume': 'Total Volume'
                 })
                 
@@ -267,7 +266,7 @@ with country_analysis_tab:
                 display_cols = [
                     'Segment', 
                     'Recency (Days)', 
-                    'Active / Total Customers', 
+                    'Active Customers', # <-- MODIFIED
                     'Total Volume', 
                     'R_Score', 
                     'F_Score', 
@@ -277,6 +276,9 @@ with country_analysis_tab:
                 
                 # Ensure all desired columns exist in the dataframe
                 final_display_cols = [col for col in display_cols if col in display_df.columns]
+                
+                # Set the index name to "Country (Total Customers)"
+                display_df.index.name = "Country (Total Customers)"
                 
                 st.dataframe(
                     display_df[final_display_cols].sort_values(by='RFM_Score', ascending=False), 
