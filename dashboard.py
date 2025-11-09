@@ -78,6 +78,49 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     rfm_df['Segment'] = rfm_df.apply(segment_customer, axis=1)
     return rfm_df
 
+# --- NEW: Country RFM Function ---
+@st.cache_data
+def calculate_country_rfm(df, date_col, country_col, quantity_col, customer_col):
+    """
+    Calculates RFM-style metrics and segments for COUNTRIES.
+    R = Recency of last order
+    F = Frequency (breadth) defined by number of unique customers
+    M = Monetary defined by total quantity
+    """
+    if df.empty or df[country_col].nunique() == 0:
+        return pd.DataFrame()
+
+    snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
+    
+    rfm_df = df.groupby(country_col).agg(
+        Recency=(date_col, lambda date: (snapshot_date - date.max()).days),
+        Frequency_Breadth=(customer_col, 'nunique'),
+        Monetary_Volume=(quantity_col, 'sum')
+    )
+
+    if rfm_df.shape[0] < 4:
+        rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
+        rfm_df['RFM_Score'] = '444'; rfm_df['Segment'] = 'Single Market'
+        return rfm_df
+
+    rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
+    rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency_Breadth'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
+    rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary_Volume'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
+    rfm_df['RFM_Score'] = rfm_df['R_Score'].astype(str) + rfm_df['F_Score'].astype(str) + rfm_df['M_Score'].astype(str)
+
+    def segment_market(row):
+        if row['R_Score'] == 4 and row['F_Score'] == 4 and row['M_Score'] == 4: return 'Champion Markets'
+        if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Established Markets'
+        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Emerging Markets'
+        if row['R_Score'] == 3 and row['F_Score'] == 1: return 'Promising Markets'
+        if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At-Risk Markets'
+        if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating Markets'
+        return 'Regular Markets'
+
+    rfm_df['Segment'] = rfm_df.apply(segment_market, axis=1)
+    return rfm_df
+# --- END NEW FUNCTION ---
+
 # --- Main App ---
 st.title("🚀 Comprehensive Sales Dashboard")
 
@@ -95,7 +138,7 @@ with st.sidebar:
     country_col = st.selectbox("Country Column", all_columns, index=find_default('Country', all_columns))
     quantity_col = st.selectbox("Quantity Column", all_columns, index=find_default('Quantity', all_columns))
     order_col = st.selectbox("Sales Order Column", all_columns, index=find_default('Sales order', all_columns))
-    product_group_col = st.selectbox("Product Group Column", all_columns, index=find_default('Product', all_columns)) # <-- NEW
+    product_group_col = st.selectbox("Product Group Column", all_columns, index=find_default('Product', all_columns))
     product_col = st.selectbox("Product Name Column", all_columns, index=find_default('Product name', all_columns))
     salesman_col = st.selectbox("Salesman Column", all_columns, index=find_default('Salesman', all_columns))
     dom_exp_col = st.selectbox("Domestic/Export Column", all_columns, index=find_default('Domestic/Export', all_columns))
@@ -104,8 +147,8 @@ with st.sidebar:
     st.header("3. Master Filters")
     start_date, end_date = st.date_input("Select Timeframe", value=(df[date_col].min().date(), df[date_col].max().date()), min_value=df[date_col].min().date(), max_value=df[date_col].max().date())
     selected_customers = st.multiselect("Filter by Customer", options=sorted([str(c) for c in df[customer_col].unique()]), default=[])
-    selected_product_groups = st.multiselect("Filter by Product Group", options=sorted([str(pg) for pg in df[product_group_col].unique()]), default=[]) # <-- NEW
-    selected_products = st.multiselect("Filter by Product Name", options=sorted([str(p) for p in df[product_col].unique()]), default=[]) # <-- MODIFIED LABEL
+    selected_product_groups = st.multiselect("Filter by Product Group", options=sorted([str(pg) for pg in df[product_group_col].unique()]), default=[])
+    selected_products = st.multiselect("Filter by Product Name", options=sorted([str(p) for p in df[product_col].unique()]), default=[])
     selected_salesmen = st.multiselect("Filter by Salesman", options=sorted([str(s) for s in df[salesman_col].unique()]), default=[])
     selected_dom_exp = st.multiselect("Filter by Domestic/Export", options=sorted([str(de) for de in df[dom_exp_col].unique()]), default=[])
     selected_countries = st.multiselect("Filter by Country", options=sorted([str(c) for c in df[country_col].unique()]), default=[])
@@ -113,7 +156,7 @@ with st.sidebar:
 # --- Filtering Logic ---
 mask = (df[date_col].dt.date >= start_date) & (df[date_col].dt.date <= end_date)
 if selected_customers: mask &= df[customer_col].isin(selected_customers)
-if selected_product_groups: mask &= df[product_group_col].isin(selected_product_groups) # <-- NEW
+if selected_product_groups: mask &= df[product_group_col].isin(selected_product_groups)
 if selected_products: mask &= df[product_col].isin(selected_products)
 if selected_salesmen: mask &= df[salesman_col].isin(selected_salesmen)
 if selected_dom_exp: mask &= df[dom_exp_col].isin(selected_dom_exp)
@@ -122,8 +165,8 @@ filtered_df = df[mask]
 if filtered_df.empty: st.warning("No data matches the selected filters."); st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
-overview_tab, customer_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "🌎 Country Analysis", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"] # <-- MODIFIED
+overview_tab, customer_tab, country_analysis_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list) # <-- MODIFIED
 
 with overview_tab:
     st.header("Dashboard Overview"); total_volume = filtered_df[quantity_col].sum(); unique_customers = filtered_df[customer_col].nunique()
@@ -137,7 +180,7 @@ with overview_tab:
         elif len(selected_countries) == 1: st.subheader(f"Showing all orders for country: {selected_countries[0]}")
         elif len(selected_salesmen) == 1: st.subheader(f"Showing all orders for salesman: {selected_salesmen[0]}")
         elif len(selected_products) > 0: st.subheader(f"Showing all orders for product(s): {', '.join(selected_products)}")
-        history_columns = [date_col, customer_col, country_col, product_group_col, product_col, salesman_col, quantity_col, order_col] # <-- MODIFIED
+        history_columns = [date_col, customer_col, country_col, product_group_col, product_col, salesman_col, quantity_col, order_col]
         display_cols = [col for col in history_columns if col in filtered_df.columns]
         history_df = filtered_df[display_cols].sort_values(by=date_col, ascending=False); st.dataframe(history_df, use_container_width=True, hide_index=True)
 
@@ -164,8 +207,30 @@ with customer_tab:
         fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Count by RFM Segment"); st.plotly_chart(fig, use_container_width=True)
         with st.expander("View Detailed RFM Data and Scores"): st.dataframe(rfm_results)
 
+# --- NEW COUNTRY ANALYSIS TAB ---
+with country_analysis_tab:
+    st.header("🌎 Country Market Analysis (RFM)")
+    st.markdown("""
+    This analysis segments your markets (countries) based on their sales behavior:
+    * **Recency (R):** How recently was the last order from that country?
+    * **Frequency (F):** How many unique customers (breadth) are in that country?
+    * **Monetary (M):** What is the total sales volume (size) for that country?
+    """)
+
+    if not filtered_df.empty:
+        country_rfm_results = calculate_country_rfm(filtered_df, date_col, country_col, quantity_col, customer_col)
+        
+        if country_rfm_results.empty:
+            st.warning("Not enough data to perform country analysis.")
+        else:
+            fig = px.bar(country_rfm_results['Segment'].value_counts(), title="Market Segment Counts")
+            st.plotly_chart(fig, use_container_width=True)
+            
+            with st.expander("View Detailed Market Scores"):
+                st.dataframe(country_rfm_results.sort_values(by='RFM_Score', ascending=False), use_container_width=True)
+
 with product_tab:
-    st.header("Product Performance (Pareto 80/20 Analysis)")
+    st.header("📦 Product Performance (Pareto 80/20 Analysis)")
     if not filtered_df.empty:
         product_sales = filtered_df.groupby(product_col)[quantity_col].sum().sort_values(ascending=False)
         product_sales_df = product_sales.reset_index(); product_sales_df['Cumulative_Percentage'] = (product_sales_df[quantity_col].cumsum() / product_sales_df[quantity_col].sum()) * 100
