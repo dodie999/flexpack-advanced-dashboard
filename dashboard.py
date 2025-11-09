@@ -43,7 +43,8 @@ def preprocess_data(df, date_col, quantity_col, customer_col):
 @st.cache_data
 def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     """
-    Calculates RFM metrics and segments customers. Handles cases with few customers.
+    (CUSTOMER RFM) Calculates RFM metrics and segments customers. 
+    This function is NOT affected by the new country logic.
     """
     if df.empty or df[customer_col].nunique() == 0:
         return pd.DataFrame()
@@ -78,25 +79,36 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
     rfm_df['Segment'] = rfm_df.apply(segment_customer, axis=1)
     return rfm_df
 
-# --- NEW: Country RFM Function ---
+# --- NEW: Country "FM" Function (Idea FM) ---
 @st.cache_data
-def calculate_country_rfm(df, date_col, country_col, quantity_col, customer_col):
+def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, active_period_months):
     """
-    Calculates RFM-style metrics and segments for COUNTRIES.
-    R = Recency of last order
-    F = Frequency (breadth) defined by number of unique customers
-    M = Monetary defined by total quantity
+    (COUNTRY RFM - IDEA FM) Calculates metrics based on an "active period".
+    R = Recency of last order from the total period
+    F = Frequency (breadth) defined by number of unique *active* customers
+    M = Monetary defined by total quantity from the total period
     """
     if df.empty or df[country_col].nunique() == 0:
         return pd.DataFrame()
 
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
     
+    # Define the "active" cutoff date
+    active_cutoff_date = snapshot_date - pd.DateOffset(months=active_period_months)
+    
+    # Create the "active" dataframe
+    active_df = df[df[date_col] >= active_cutoff_date]
+
+    # Calculate metrics
     rfm_df = df.groupby(country_col).agg(
         Recency=(date_col, lambda date: (snapshot_date - date.max()).days),
-        Frequency_Breadth=(customer_col, 'nunique'),
         Monetary_Volume=(quantity_col, 'sum')
     )
+    
+    # Calculate Active Customer Breadth (F-Score)
+    active_customers_per_country = active_df.groupby(country_col)[customer_col].nunique()
+    # Join it with the main rfm_df, fill with 0 for countries with no active customers
+    rfm_df = rfm_df.join(active_customers_per_country.rename('Frequency_Active_Breadth')).fillna(0)
 
     if rfm_df.shape[0] < 4:
         rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
@@ -104,22 +116,22 @@ def calculate_country_rfm(df, date_col, country_col, quantity_col, customer_col)
         return rfm_df
 
     rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
-    rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency_Breadth'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
+    rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency_Active_Breadth'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary_Volume'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['RFM_Score'] = rfm_df['R_Score'].astype(str) + rfm_df['F_Score'].astype(str) + rfm_df['M_Score'].astype(str)
 
     def segment_market(row):
-        if row['R_Score'] == 4 and row['F_Score'] == 4 and row['M_Score'] == 4: return 'Champion Markets'
-        if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Established Markets'
-        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Emerging Markets'
-        if row['R_Score'] == 3 and row['F_Score'] == 1: return 'Promising Markets'
-        if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At-Risk Markets'
+        if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Healthy Markets'
+        if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Single Customer Market' # 411 from our example
+        if row['R_Score'] >= 3 and row['F_Score'] == 1: return 'Promising Markets'
+        if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At-Risk (High Breadth)'
         if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating Markets'
         return 'Regular Markets'
 
     rfm_df['Segment'] = rfm_df.apply(segment_market, axis=1)
     return rfm_df
 # --- END NEW FUNCTION ---
+
 
 # --- Main App ---
 st.title("🚀 Comprehensive Sales Dashboard")
@@ -165,8 +177,8 @@ filtered_df = df[mask]
 if filtered_df.empty: st.warning("No data matches the selected filters."); st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "🌎 Country Analysis", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"] # <-- MODIFIED
-overview_tab, customer_tab, country_analysis_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list) # <-- MODIFIED
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "🌎 Country Analysis", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
+overview_tab, customer_tab, country_analysis_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
 
 with overview_tab:
     st.header("Dashboard Overview"); total_volume = filtered_df[quantity_col].sum(); unique_customers = filtered_df[customer_col].nunique()
@@ -201,28 +213,32 @@ with customer_tab:
             customer_data = filtered_df[filtered_df[customer_col] == selected_customer]; customer_monthly_consumption = customer_data.set_index(date_col)[quantity_col].resample('M').sum()
             avg_consumption = customer_monthly_consumption.mean(); st.metric(f"Avg. Monthly Consumption for {selected_customer}", f"{avg_consumption:,.2f} units")
             fig = px.bar(customer_monthly_consumption, title=f"Monthly Purchases for {selected_customer}"); st.plotly_chart(fig, use_container_width=True)
-    st.markdown("---"); st.markdown("### RFM Segmentation")
+    st.markdown("---"); st.markdown("### RFM Segmentation (by Customer)")
     if not filtered_df.empty:
         rfm_results = calculate_rfm(filtered_df, date_col, customer_col, quantity_col, order_col)
-        fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Count by RFM Segment"); st.plotly_chart(fig, use_container_width=True)
-        with st.expander("View Detailed RFM Data and Scores"): st.dataframe(rfm_results)
+        fig = px.bar(rfm_results['Segment'].value_counts(), title="Customer Segment Counts"); st.plotly_chart(fig, use_container_width=True)
+        with st.expander("View Detailed Customer RFM Data"): st.dataframe(rfm_results)
 
-# --- NEW COUNTRY ANALYSIS TAB ---
+# --- MODIFIED: Country Analysis Tab (Idea FM) ---
 with country_analysis_tab:
-    st.header("🌎 Country Market Analysis (RFM)")
+    st.header("🌎 Country Market Analysis (FM Model)")
     st.markdown("""
-    This analysis segments your markets (countries) based on their sales behavior:
-    * **Recency (R):** How recently was the last order from that country?
-    * **Frequency (F):** How many unique customers (breadth) are in that country?
-    * **Monetary (M):** What is the total sales volume (size) for that country?
+    This analysis segments your markets based on their **Active Health**:
+    * **Recency (R):** How recently was the last order? (from total period)
+    * **Frequency (F):** How many unique customers (breadth) were **active** in the defined period?
+    * **Monetary (M):** What is the total sales volume (size)? (from total period)
     """)
+    
+    # NEW: Active Period Slider
+    active_months = st.slider("Define 'Active Period' (in months):", 1, 24, 6)
 
     if not filtered_df.empty:
-        country_rfm_results = calculate_country_rfm(filtered_df, date_col, country_col, quantity_col, customer_col)
+        country_rfm_results = calculate_country_fm(filtered_df, date_col, country_col, quantity_col, customer_col, active_months)
         
         if country_rfm_results.empty:
             st.warning("Not enough data to perform country analysis.")
         else:
+            st.subheader(f"Market Segments based on {active_months}-Month Activity")
             fig = px.bar(country_rfm_results['Segment'].value_counts(), title="Market Segment Counts")
             st.plotly_chart(fig, use_container_width=True)
             
