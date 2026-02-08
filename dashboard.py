@@ -264,13 +264,54 @@ with tabs[7]: # Forecast with Holiday context
         fcst = m.predict(fut)
         st.pyplot(m.plot(fcst))
 
-with tabs[8]: # CLV
+with tabs[8]: # CLV Prediction
     st.header("💎 CLV Prediction")
+    st.markdown("This analysis forecasts future value based on repeat purchase patterns.")
     days = st.slider("Prediction Days:", 30, 365, 90)
+    
     if st.button("Predict CLV"):
-        clv_base = summary_data_from_transaction_data(filtered_df, customer_col, date_col, quantity_col, observation_period_end=pd.to_datetime(end_date))
-        clv_base = clv_base[clv_base['monetary_value'] > 0]
-        bgf = BetaGeoFitter(penalizer_coef=0.0); bgf.fit(clv_base['frequency'], clv_base['recency'], clv_base['T'])
-        ggf = GammaGammaFitter(penalizer_coef=0.0); ggf.fit(clv_base['frequency'], clv_base['monetary_value'])
-        clv_base['Predicted CLV'] = ggf.customer_lifetime_value(bgf, clv_base['frequency'], clv_base['recency'], clv_base['T'], clv_base['monetary_value'], time=days)
-        st.dataframe(clv_base[['Predicted CLV']].sort_values(by='Predicted CLV', ascending=False))
+        # 1. Prepare the data
+        clv_base = summary_data_from_transaction_data(
+            filtered_df, 
+            customer_col, 
+            date_col, 
+            quantity_col, 
+            observation_period_end=pd.to_datetime(end_date)
+        )
+        
+        # 2. Filter for customers with at least some repeat activity
+        # Lifetimes models often struggle with strictly 0-frequency (one-time) customers
+        clv_filtered = clv_base[(clv_base['monetary_value'] > 0) & (clv_base['frequency'] > 0)]
+        
+        if clv_filtered.empty or len(clv_filtered) < 5:
+            st.warning("⚠️ Not enough repeat-purchase data in this selection to build a CLV model.")
+        else:
+            with st.spinner("Training CLV model..."):
+                try:
+                    # 3. Fit the BG/NBD model with a small penalizer to help convergence
+                    bgf = BetaGeoFitter(penalizer_coef=0.01) # Small penalizer helps stability
+                    bgf.fit(clv_filtered['frequency'], clv_filtered['recency'], clv_filtered['T'])
+                    
+                    # 4. Fit the Gamma-Gamma model
+                    ggf = GammaGammaFitter(penalizer_coef=0.01)
+                    ggf.fit(clv_filtered['frequency'], clv_filtered['monetary_value'])
+                    
+                    # 5. Predict Value
+                    clv_filtered['Predicted CLV'] = ggf.customer_lifetime_value(
+                        bgf, 
+                        clv_filtered['frequency'], 
+                        clv_filtered['recency'], 
+                        clv_filtered['T'], 
+                        clv_filtered['monetary_value'], 
+                        time=days
+                    )
+                    
+                    st.success("Model converged successfully!")
+                    st.dataframe(
+                        clv_filtered[['Predicted CLV']].sort_values(by='Predicted CLV', ascending=False),
+                        use_container_width=True
+                    )
+                    
+                except Exception as e:
+                    st.error(f"📈 Convergence Error: The model couldn't find a stable pattern in this specific data slice.")
+                    st.info("This often happens with domestic data if ordering patterns are too irregular. Try expanding your timeframe or selecting more customers.")
