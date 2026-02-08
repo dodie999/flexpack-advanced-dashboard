@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from prophet import Prophet
 import openpyxl
+import io
 from lifetimes import BetaGeoFitter, GammaGammaFitter
 from lifetimes.utils import summary_data_from_transaction_data
 
@@ -42,30 +43,22 @@ def preprocess_data(df, date_col, quantity_col, customer_col):
 # --- Analytical Functions ---
 @st.cache_data
 def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
-    """
-    (CUSTOMER RFM) Calculates RFM metrics and segments customers. 
-    This function is NOT affected by the new country logic.
-    """
     if df.empty or df[customer_col].nunique() == 0:
         return pd.DataFrame()
-
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
     rfm_df = df.groupby(customer_col).agg({
         date_col: lambda date: (snapshot_date - date.max()).days,
         order_col: 'nunique',
         quantity_col: 'sum'
     }).rename(columns={date_col: 'Recency', order_col: 'Frequency', quantity_col: 'Monetary'})
-
     if rfm_df.shape[0] < 4:
         rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
         rfm_df['RFM_Score'] = '444'; rfm_df['Segment'] = 'Individual Analysis'
         return rfm_df
-
     rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
     rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['RFM_Score'] = rfm_df['R_Score'].astype(str) + rfm_df['F_Score'].astype(str) + rfm_df['M_Score'].astype(str)
-
     def segment_customer(row):
         if row['R_Score'] == 4 and row['F_Score'] == 4 and row['M_Score'] == 4: return 'Champions'
         if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Loyal Customers'
@@ -75,53 +68,32 @@ def calculate_rfm(df, date_col, customer_col, quantity_col, order_col):
         if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At Risk'
         if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating'
         return 'Regular'
-
     rfm_df['Segment'] = rfm_df.apply(segment_customer, axis=1)
     return rfm_df
 
 @st.cache_data
 def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, active_period_months):
-    """
-    (COUNTRY RFM - IDEA FM) Calculates metrics based on an "active period".
-    R = Recency of last order from the total period
-    F = Frequency (breadth) defined by number of unique *active* customers
-    M = Monetary defined by total quantity from the total period
-    """
     if df.empty or df[country_col].nunique() == 0:
         return pd.DataFrame()
-
     snapshot_date = df[date_col].max() + pd.Timedelta(days=1)
-    
     active_cutoff_date = snapshot_date - pd.DateOffset(months=active_period_months)
-    
     active_df = df[df[date_col] >= active_cutoff_date]
-
-    rfm_df = df.groupby(country_col).agg(
-        Recency=(date_col, lambda date: (snapshot_date - date.max()).days),
-        Monetary_Volume=(quantity_col, 'sum')
-    )
-    
+    rfm_df = df.groupby(country_col).agg(Recency=(date_col, lambda date: (snapshot_date - date.max()).days), Monetary_Volume=(quantity_col, 'sum'))
     active_customers_per_country = active_df.groupby(country_col)[customer_col].nunique()
     total_customers_per_country = df.groupby(country_col)[customer_col].nunique()
-
     rfm_df = rfm_df.join(active_customers_per_country.rename('Frequency_Active_Breadth')).fillna(0)
     rfm_df = rfm_df.join(total_customers_per_country.rename('Frequency_Total_Breadth')).fillna(0)
-
     rfm_df['Frequency_Active_Breadth'] = rfm_df['Frequency_Active_Breadth'].astype(int)
     rfm_df['Frequency_Total_Breadth'] = rfm_df['Frequency_Total_Breadth'].astype(int)
-
     rfm_df.index = rfm_df.index.astype(str) + ' (' + rfm_df['Frequency_Total_Breadth'].astype(str) + ')'
-
     if rfm_df.shape[0] < 4:
         rfm_df['R_Score'] = 4; rfm_df['F_Score'] = 4; rfm_df['M_Score'] = 4
         rfm_df['RFM_Score'] = '444'; rfm_df['Segment'] = 'Single Market'
         return rfm_df
-
     rfm_df['R_Score'] = pd.qcut(rfm_df['Recency'], 4, labels=[4, 3, 2, 1], duplicates='drop').astype(int)
     rfm_df['F_Score'] = pd.qcut(rfm_df['Frequency_Active_Breadth'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['M_Score'] = pd.qcut(rfm_df['Monetary_Volume'].rank(method='first'), 4, labels=[1, 2, 3, 4], duplicates='drop').astype(int)
     rfm_df['RFM_Score'] = rfm_df['R_Score'].astype(str) + rfm_df['F_Score'].astype(str) + rfm_df['M_Score'].astype(str)
-
     def segment_market(row):
         if row['R_Score'] >= 3 and row['F_Score'] >= 3: return 'Healthy Markets'
         if row['R_Score'] == 4 and row['F_Score'] == 1: return 'Single Customer Market'
@@ -129,7 +101,6 @@ def calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, 
         if row['R_Score'] <= 2 and row['F_Score'] >= 3: return 'At-Risk (High Breadth)'
         if row['R_Score'] <= 2 and row['F_Score'] <= 2: return 'Hibernating Markets'
         return 'Regular Markets'
-
     rfm_df['Segment'] = rfm_df.apply(segment_market, axis=1)
     return rfm_df
 
@@ -177,8 +148,8 @@ filtered_df = df[mask]
 if filtered_df.empty: st.warning("No data matches the selected filters."); st.stop()
 
 # --- Main Dashboard with Tabs ---
-tab_list = ["📊 Overview", "👤 Customer Deep Dive", "🌎 Country Analysis", "📦 Product Analysis", "🔬 Sample Analysis", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
-overview_tab, customer_tab, country_analysis_tab, product_tab, sample_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
+tab_list = ["📊 Overview", "👤 Customer Deep Dive", "🌎 Country Analysis", "📦 Product Analysis", "🔬 Sample Analysis", "📞 CRM & Follow-Up", "🔄 Timeframe Comparison", "📈 Sales Forecast", "💎 CLV Prediction"]
+overview_tab, customer_tab, country_analysis_tab, product_tab, sample_tab, crm_tab, comparison_tab, forecast_tab, clv_tab = st.tabs(tab_list)
 
 with overview_tab:
     st.header("Dashboard Overview"); total_volume = filtered_df[quantity_col].sum(); unique_customers = filtered_df[customer_col].nunique()
@@ -201,8 +172,9 @@ with customer_tab:
     if not filtered_df.empty:
         customer_volumes = filtered_df.groupby(customer_col)[quantity_col].sum()
         if not customer_volumes.empty:
-            max_volume = int(customer_volumes.max())
-            volume_threshold = st.slider("Minimum Total Quantity per Customer:", min_value=0, max_value=max_volume, value=int(max_volume/4))
+            max_volume = float(customer_volumes.max())
+            # FIX APPLIED HERE: max_value instead of max_volume
+            volume_threshold = st.slider("Minimum Total Quantity per Customer:", min_value=0.0, max_value=max_volume, value=float(max_volume/4))
             high_volume_customers = customer_volumes[customer_volumes > volume_threshold]; st.metric(f"Customers with > {volume_threshold:,} units", len(high_volume_customers))
             with st.expander("View High-Volume Customer List"): st.dataframe(high_volume_customers.sort_values(ascending=False))
     st.markdown("---"); st.markdown("### Individual Customer Consumption")
@@ -227,48 +199,21 @@ with country_analysis_tab:
     * **Frequency (F):** How many unique customers (breadth) were **active** in the defined period?
     * **Monetary (M):** What is the total sales volume (size)? (from total period)
     """)
-    
     active_months = st.slider("Define 'Active Period' (in months):", 1, 24, 6)
-
     if not filtered_df.empty:
-        # Use the *unfiltered* df for a complete historical analysis
         country_rfm_results = calculate_country_fm(df, date_col, country_col, quantity_col, customer_col, active_months)
-        
         if country_rfm_results.empty:
             st.warning("Not enough data to perform country analysis.")
         else:
             st.subheader(f"Market Segments based on {active_months}-Month Activity")
             fig = px.bar(country_rfm_results['Segment'].value_counts(), title="Market Segment Counts")
             st.plotly_chart(fig, use_container_width=True)
-            
             with st.expander("View Detailed Market Scores"):
-                # Rename columns for a cleaner display
-                display_df = country_rfm_results.rename(columns={
-                    'Recency': 'Recency (Days)',
-                    'Frequency_Active_Breadth': 'Frequency (Active Customers)', # <-- MODIFIED
-                    'Monetary_Volume': 'Monetary (Total Volume)' # <-- MODIFIED
-                })
-                
-                # Define the columns we want to show
-                display_cols = [ 
-                    'Recency (Days)', 
-                    'Frequency (Active Customers)', # <-- MODIFIED
-                    'Monetary (Total Volume)', # <-- MODIFIED
-                    'R_Score', 
-                    'F_Score', 
-                    'M_Score',
-                    'RFM_Score',
-                    'Segment'
-                ]
-                
+                display_df = country_rfm_results.rename(columns={'Recency': 'Recency (Days)', 'Frequency_Active_Breadth': 'Frequency (Active Customers)', 'Monetary_Volume': 'Monetary (Total Volume)'})
+                display_cols = ['Segment', 'Recency (Days)', 'Frequency (Active Customers)', 'Monetary (Total Volume)', 'R_Score', 'F_Score', 'M_Score', 'RFM_Score']
                 final_display_cols = [col for col in display_cols if col in display_df.columns]
-                
                 display_df.index.name = "Country (Total Customers)"
-                
-                st.dataframe(
-                    display_df[final_display_cols].sort_values(by='RFM_Score', ascending=False), 
-                    use_container_width=True
-                )
+                st.dataframe(display_df[final_display_cols].sort_values(by='RFM_Score', ascending=False), use_container_width=True)
 
 with product_tab:
     st.header("📦 Product Performance (Pareto 80/20 Analysis)")
@@ -279,7 +224,7 @@ with product_tab:
         st.plotly_chart(fig, use_container_width=True)
 
 with sample_tab:
-    st.header("🔬 Sample Conversion Analysis"); st.markdown("This tool identifies samples based on the combined quantity of related products within a single order.")
+    st.header("🔬 Sample Conversion Analysis")
     sample_threshold = st.number_input("Set the maximum combined quantity for a 'sample' (in kg):", min_value=1, value=200)
     df_analysis = df.copy(); df_analysis['Product_Base'] = df_analysis[product_col].str.extract(r'(\d+)'); df_analysis.dropna(subset=['Product_Base'], inplace=True)
     df_analysis['Combined_Order_Quantity'] = df_analysis.groupby([order_col, 'Product_Base'])[quantity_col].transform('sum')
@@ -305,10 +250,43 @@ with sample_tab:
             conversion_rate = (converted_count / total_sampled_count * 100) if total_sampled_count > 0 else 0
             col1.metric("Sampled Customers (in view)", f"{total_sampled_count}"); col2.metric("Converted Customers", f"{converted_count}"); col3.metric("Conversion Rate", f"{conversion_rate:.1f}%")
             st.subheader("Customer Conversion Details"); st.dataframe(conversion_df.sort_values(by="Post-Conversion Volume", ascending=False), use_container_width=True, hide_index=True)
-            with st.expander("View All Sample Line Items (in current filter)"):
-                samples_in_view_df = df_analysis[(df_analysis['Order_Type'] == 'Sample') & (df_analysis[customer_col].isin(customers_in_view))]
-                sample_display_cols = [date_col, customer_col, country_col, product_col, quantity_col, 'Product_Base', 'Combined_Order_Quantity', 'Order_Type']
-                st.dataframe(samples_in_view_df[sample_display_cols].sort_values(by=date_col, ascending=False), use_container_width=True, hide_index=True)
+
+with crm_tab:
+    st.header("📞 CRM & Sales Follow-Up Prioritization")
+    crm_prep = []
+    snapshot_date = df[date_col].max()
+    for customer, c_df in filtered_df.groupby(customer_col):
+        c_df = c_df.sort_values(by=date_col)
+        last_ship = c_df[date_col].max()
+        days_since = (snapshot_date - last_ship).days
+        total_orders = c_df[order_col].nunique()
+        avg_freq = ((c_df[date_col].max() - c_df[date_col].min()).days / (total_orders - 1)) if total_orders > 1 else 0
+        three_mo_cutoff = snapshot_date - pd.DateOffset(months=3)
+        three_mo_cons = c_df[c_df[date_col] >= three_mo_cutoff][quantity_col].sum() / 3
+        last_order_qty = c_df[c_df[date_col] == last_ship][quantity_col].sum()
+        crm_prep.append({customer_col: customer, 'Country': c_df[country_col].iloc[0], 'Frequency (Days)': round(avg_freq, 1), '3 Month Avg. Consumption (MT per month)': round(three_mo_cons, 2), 'Last Order (MT)': round(last_order_qty, 2), 'Last Ship Date': last_ship.date(), 'Days Since Last Order': days_since})
+    crm_base_df = pd.DataFrame(crm_prep)
+    st.subheader("1. Customer Health Matrix")
+    fig_crm = px.scatter(crm_base_df, x='Frequency (Days)', y='3 Month Avg. Consumption (MT per month)', size='Last Order (MT)', color='Country', hover_name=customer_col, template="plotly_white")
+    st.plotly_chart(fig_crm, use_container_width=True)
+    st.subheader("2. Actionable Follow-Up List")
+    for contact_col in ["Purchasing Person", "Purchasing Email", "Honorific (Mr/Ms/Dr)"]:
+        if contact_col not in crm_base_df.columns: crm_base_df[contact_col] = ""
+    edited_crm_df = st.data_editor(crm_base_df, use_container_width=True, hide_index=True, column_order=[customer_col, "Purchasing Person", "Honorific (Mr/Ms/Dr)", "Purchasing Email", 'Frequency (Days)', '3 Month Avg. Consumption (MT per month)', 'Last Ship Date', 'Days Since Last Order'])
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        edited_crm_df.to_excel(writer, index=False, sheet_name='FollowUps')
+    st.download_button("📥 Download Follow-up List (Excel)", data=output.getvalue(), file_name="Sales_Prioritization.xlsx")
+    st.divider()
+    st.subheader("3. Follow-Up Email Generator")
+    target_cust = st.selectbox("Select Customer to Contact:", options=edited_crm_df[customer_col].unique())
+    if target_cust:
+        row = edited_crm_df[edited_crm_df[customer_col] == target_cust].iloc[0]
+        c1, c2 = st.columns(2)
+        h_title = c1.text_input("Honorific Title:", value=row["Honorific (Mr/Ms/Dr)"] if row["Honorific (Mr/Ms/Dr)"] else "Mr./Ms.")
+        p_name = c2.text_input("Purchasing Person Name:", value=row["Purchasing Person"])
+        email_body = f"Subject: Re-stocking / Order Review for {target_cust}\n\nDear {h_title} {p_name},\n\nI hope you're well. I was reviewing our shipment logs for {target_cust} and noted our last shipment was {row['Last Order (MT)']} MT on {row['Last Ship Date']}.\n\nBased on your typical cadence of {row['Frequency (Days)']} days, I wanted to check in to see if you have any upcoming requirements...\n\nBest regards,"
+        st.code(email_body, language="text")
 
 with comparison_tab:
     st.header("Timeframe Comparison"); col1, col2 = st.columns(2)
@@ -321,29 +299,30 @@ with comparison_tab:
     with c2: st.metric("Period 2 Sales", f"{p2_sales:,.0f}", delta=f"{p2_sales - p1_sales:,.0f}"); st.metric("Period 2 Customers", f"{p2_customers:,}", delta=f"{p2_customers - p1_customers:,}")
 
 with forecast_tab:
-    st.header("Sales Forecasting");
+    st.header("Sales Forecasting")
+    c1, c2 = st.columns(2)
+    country_code = c1.text_input("Enter Country Code for Holidays (e.g., US, EG, AE)", "EG")
+    selected_forecast_prod = c2.selectbox("Select Forecast Target:", options=["Total Sales"] + sorted(df[product_col].unique().tolist()))
     if st.button("Generate 90-Day Forecast"):
         with st.spinner("Training model..."):
-            forecast_df = df.set_index(date_col)[quantity_col].resample('D').sum().reset_index().rename(columns={date_col: 'ds', quantity_col: 'y'})
-            model = Prophet(); model.fit(forecast_df); future = model.make_future_dataframe(periods=90); forecast = model.predict(future)
-            fig = model.plot(forecast); st.pyplot(fig)
+            f_df = df if selected_forecast_prod == "Total Sales" else df[df[product_col] == selected_forecast_prod]
+            forecast_df = f_df.set_index(date_col)[quantity_col].resample('D').sum().reset_index().rename(columns={date_col: 'ds', quantity_col: 'y'})
+            model = Prophet()
+            if country_code: 
+                try: model.add_country_holidays(country_name=country_code)
+                except: st.warning(f"Could not load holidays for {country_code}")
+            model.fit(forecast_df); future = model.make_future_dataframe(periods=90); forecast = model.predict(future)
+            st.pyplot(model.plot(forecast))
 
 with clv_tab:
     st.header("💎 Customer Lifetime Value (CLV) Prediction")
-    st.markdown("This analysis forecasts the future value of your customers based on their past transaction history.")
     prediction_days = st.slider("Select prediction timeframe (days):", 30, 365, 90)
     if st.button("Calculate CLV"):
-        if filtered_df.empty or filtered_df[customer_col].nunique() < 10: st.warning("Not enough unique customer data to build a reliable CLV model.")
+        if filtered_df.empty or filtered_df[customer_col].nunique() < 10: st.warning("Not enough unique customer data.")
         else:
-            with st.spinner("Preparing data and training CLV models..."):
-                clv_df = summary_data_from_transaction_data(filtered_df, customer_id_col=customer_col, datetime_col=date_col, monetary_value_col=quantity_col, observation_period_end=pd.to_datetime(end_date))
-                clv_df = clv_df[clv_df['monetary_value'] > 0]
-                if clv_df.empty: st.error("No customers with repeat purchases found. Cannot calculate CLV.")
-                else:
-                    bgf = BetaGeoFitter(penalizer_coef=0.0); bgf.fit(clv_df['frequency'], clv_df['recency'], clv_df['T'])
-                    ggf = GammaGammaFitter(penalizer_coef=0.0); ggf.fit(clv_df['frequency'], clv_df['monetary_value'])
-                    clv_df['predicted_clv'] = ggf.customer_lifetime_value(bgf, clv_df['frequency'], clv_df['recency'], clv_df['T'], clv_df['monetary_value'], time=prediction_days, discount_rate=0.01)
-                    st.success("CLV Calculation Complete!")
-                    st.subheader(f"Top Customers by Predicted CLV over the next {prediction_days} days")
-                    clv_results = clv_df[['predicted_clv']].sort_values(by='predicted_clv', ascending=False).reset_index()
-                    st.dataframe(clv_results, use_container_width=True, hide_index=True, column_config={"predicted_clv": st.column_config.NumberColumn(format="%.2f")})
+            clv_df = summary_data_from_transaction_data(filtered_df, customer_id_col=customer_col, datetime_col=date_col, monetary_value_col=quantity_col, observation_period_end=pd.to_datetime(end_date))
+            clv_df = clv_df[clv_df['monetary_value'] > 0]
+            bgf = BetaGeoFitter(penalizer_coef=0.0); bgf.fit(clv_df['frequency'], clv_df['recency'], clv_df['T'])
+            ggf = GammaGammaFitter(penalizer_coef=0.0); ggf.fit(clv_df['frequency'], clv_df['monetary_value'])
+            clv_df['predicted_clv'] = ggf.customer_lifetime_value(bgf, clv_df['frequency'], clv_df['recency'], clv_df['T'], clv_df['monetary_value'], time=prediction_days, discount_rate=0.01)
+            st.dataframe(clv_df[['predicted_clv']].sort_values(by='predicted_clv', ascending=False))
