@@ -1,6 +1,9 @@
 streamlit
 pandas
+numpy
 plotly
 prophet
 openpyxl
 lifetimes
+xlsxwriter
+matplotlib
