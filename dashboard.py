@@ -174,7 +174,7 @@ with tabs[0]: # Overview
     c1, c2 = st.columns(2)
     c1.metric("Total Sales Volume", f"{total_volume:,.0f}")
     c2.metric("Unique Customers", f"{unique_cust:,}")
-    monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('M').sum()
+    monthly_sales = filtered_df.set_index(date_col)[quantity_col].resample('ME').sum()
     st.plotly_chart(px.line(monthly_sales, title="Monthly Sales Trend"), use_container_width=True)
 
 with tabs[1]: # Customer Deep Dive
